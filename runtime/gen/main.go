@@ -23,6 +23,7 @@ import (
 	"text/template"
 
 	"tidbyt.dev/pixlet/render"
+	"tidbyt.dev/pixlet/render/animation"
 )
 
 const StarlarkHeaderTemplate = "./gen/header.tmpl"
@@ -45,6 +46,7 @@ var RenderWidgets = []render.Widget{
 	render.Marquee{},
 	render.Animation{},
 	render.WrappedText{},
+	animation.AnimatedPositioned{},
 }
 
 // Defines the starlark version of a render.Widget
@@ -59,10 +61,12 @@ type Attribute struct {
 
 type StarlarkWidget struct {
 	Name          string
+	FullName      string
 	AttrAll       []*Attribute
 	AttrString    []*Attribute
 	AttrInt       []*Attribute
 	AttrColor     []*Attribute
+	AttrCurve     []*Attribute
 	AttrBool      []*Attribute
 	AttrChildren  []*Attribute
 	AttrChild     []*Attribute
@@ -99,6 +103,7 @@ func starlarkWidgetFromRenderWidget(w render.Widget) *StarlarkWidget {
 	typ := val.Type()
 
 	sw.Name = typ.Name()
+	sw.FullName = typ.String()
 
 	if _, hasSize := w.(render.WidgetStaticSize); hasSize {
 		sw.HasSize = true
@@ -175,11 +180,15 @@ func starlarkWidgetFromRenderWidget(w render.Widget) *StarlarkWidget {
 			}
 		case reflect.Interface:
 			colorType := reflect.TypeOf((*color.Color)(nil)).Elem()
+			curveType := reflect.TypeOf((*animation.Curve)(nil)).Elem()
 			widgetType := reflect.TypeOf((*render.Widget)(nil)).Elem()
 
 			if field.Type.Implements(colorType) {
 				sw.AttrColor = append(sw.AttrColor, attr)
 				attr.Type = "color"
+			} else if field.Type.Implements(curveType) {
+				sw.AttrCurve = append(sw.AttrCurve, attr)
+				attr.Type = "curve"
 			} else if field.Type.Implements(widgetType) {
 				sw.AttrChild = append(sw.AttrChild, attr)
 				attr.Type = "Widget"
