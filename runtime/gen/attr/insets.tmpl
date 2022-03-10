@@ -1,0 +1,33 @@
+{{if not .ReadOnly}}
+	w.starlark{{.Render}} = {{.Starlark}}
+	switch {{.Starlark}}Val := {{.Starlark}}.(type) {
+	case starlark.Int:
+		{{.Starlark}}Int := int({{.Starlark}}Val.BigInt().Int64())
+		w.{{.Render}}.Left = {{.Starlark}}Int
+		w.{{.Render}}.Top = {{.Starlark}}Int
+		w.{{.Render}}.Right = {{.Starlark}}Int
+		w.{{.Render}}.Bottom = {{.Starlark}}Int
+	case starlark.Tuple:
+		{{.Starlark}}List := []starlark.Value({{.Starlark}}Val)
+		if len({{.Starlark}}List) != 4 {
+			return nil, fmt.Errorf(
+				"{{.Starlark}} tuple must hold 4 elements (left, top, right, bottom), found %d",
+				len({{.Starlark}}List),
+			)
+		}
+		{{.Starlark}}ListInt := make([]starlark.Int, 4)
+		for i := 0; i < 4; i++ {
+			pi, ok := {{.Starlark}}List[i].(starlark.Int)
+			if !ok {
+				return nil, fmt.Errorf("{{.Starlark}} element %d is not int", i)
+			}
+			{{.Starlark}}ListInt[i] = pi
+		}
+		w.{{.Render}}.Left = int({{.Starlark}}ListInt[0].BigInt().Int64())
+		w.{{.Render}}.Top = int({{.Starlark}}ListInt[1].BigInt().Int64())
+		w.{{.Render}}.Right = int({{.Starlark}}ListInt[2].BigInt().Int64())
+		w.{{.Render}}.Bottom = int({{.Starlark}}ListInt[3].BigInt().Int64())
+	default:
+		return nil, fmt.Errorf("{{.Starlark}} must be int or 4-tuple of int")
+	}
+{{end}}

@@ -1,0 +1,10 @@
+{{if not .ReadOnly}}
+	w.starlark{{.Render}} = {{.Starlark}}
+    if {{.Starlark}} == nil {
+		w.{{.Render}} = animation.DefaultOrigin
+	} else if {{.Starlark}}Val, ok := {{.Starlark}}.(*Origin); ok {
+		w.{{.Render}} = {{.Starlark}}Val.Origin
+	} else {
+		return nil, fmt.Errorf("invalid type for origin: %s (expected Origin)", {{.Starlark}}.Type())
+	}
+{{end}}

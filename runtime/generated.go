@@ -4,16 +4,14 @@ package runtime
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/mitchellh/hashstructure/v2"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 	"tidbyt.dev/pixlet/render"
-)
-
-const (
-	ModuleName = "render"
+	"tidbyt.dev/pixlet/render/animation"
 )
 
 var (
@@ -30,18 +28,20 @@ func LoadModule() (starlark.StringDict, error) {
 		fnt.Freeze()
 
 		module = starlark.StringDict{
-			ModuleName: &starlarkstruct.Module{
-				Name: ModuleName,
+			"render": &starlarkstruct.Module{
+				Name: "render",
 				Members: starlark.StringDict{
-					"Root": starlark.NewBuiltin("Root", newRoot),
-					"Plot": starlark.NewBuiltin("Plot", newPlot),
-					"AnimatedPositioned": starlark.NewBuiltin(
-						"AnimatedPositioned",
-						newAnimatedPositioned,
-					),
+					"Root":  starlark.NewBuiltin("Root", newRoot),
+					"Plot":  starlark.NewBuiltin("Plot", newPlot),
 					"fonts": fnt,
 
+					"Animate": starlark.NewBuiltin("Animate", newAnimate),
+
+					"AnimatedPositioned": starlark.NewBuiltin("AnimatedPositioned", newAnimatedPositioned),
+
 					"Animation": starlark.NewBuiltin("Animation", newAnimation),
+
+					"Bounce": starlark.NewBuiltin("Bounce", newBounce),
 
 					"Box": starlark.NewBuiltin("Box", newBox),
 
@@ -51,15 +51,25 @@ func LoadModule() (starlark.StringDict, error) {
 
 					"Image": starlark.NewBuiltin("Image", newImage),
 
+					"Keyframe": starlark.NewBuiltin("Keyframe", newKeyframe),
+
 					"Marquee": starlark.NewBuiltin("Marquee", newMarquee),
+
+					"Origin": starlark.NewBuiltin("Origin", newOrigin),
 
 					"Padding": starlark.NewBuiltin("Padding", newPadding),
 
+					"Rotate": starlark.NewBuiltin("Rotate", newRotate),
+
 					"Row": starlark.NewBuiltin("Row", newRow),
+
+					"Scale": starlark.NewBuiltin("Scale", newScale),
 
 					"Stack": starlark.NewBuiltin("Stack", newStack),
 
 					"Text": starlark.NewBuiltin("Text", newText),
+
+					"Translate": starlark.NewBuiltin("Translate", newTranslate),
 
 					"WrappedText": starlark.NewBuiltin("WrappedText", newWrappedText),
 				},
@@ -73,8 +83,325 @@ func LoadModule() (starlark.StringDict, error) {
 type Widget interface {
 	AsRenderWidget() render.Widget
 }
+type Animate struct {
+	Widget
+
+	animation.Animate
+
+	starlarkChild starlark.Value
+
+	starlarkKeyframes *starlark.List
+
+	starlarkOrigin starlark.Value
+
+	starlarkCurve starlark.Value
+
+	starlarkRounding starlark.String
+}
+
+func newAnimate(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		child     starlark.Value
+		keyframes *starlark.List
+		duration  starlark.Int
+		delay     starlark.Int
+		origin    starlark.Value
+		curve     starlark.Value
+		rounding  starlark.String
+	)
+
+	if err := starlark.UnpackArgs(
+		"Animate",
+		args, kwargs,
+		"child", &child,
+		"keyframes", &keyframes,
+		"duration", &duration,
+		"delay?", &delay,
+		"origin?", &origin,
+		"curve?", &curve,
+		"rounding?", &rounding,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for Animate: %s", err)
+	}
+
+	w := &Animate{}
+
+	if child != nil {
+		childWidget, ok := child.(Widget)
+		if !ok {
+			return nil, fmt.Errorf(
+				"invalid type for child: %s (expected Widget)",
+				child.Type(),
+			)
+		}
+		w.Child = childWidget.AsRenderWidget()
+		w.starlarkChild = child
+	}
+
+	w.starlarkKeyframes = keyframes
+	for i := 0; i < keyframes.Len(); i++ {
+		if keyframesVal, ok := keyframes.Index(i).(*Keyframe); ok {
+			w.Keyframes = append(w.Keyframes, keyframesVal.Keyframe)
+		} else {
+			return nil, fmt.Errorf("invalid type for keyframes: %s (expected Keyframe)", keyframesVal.Type())
+		}
+	}
+
+	w.Duration = int(duration.BigInt().Int64())
+
+	w.Delay = int(delay.BigInt().Int64())
+
+	w.starlarkOrigin = origin
+	if origin == nil {
+		w.Origin = animation.DefaultOrigin
+	} else if originVal, ok := origin.(*Origin); ok {
+		w.Origin = originVal.Origin
+	} else {
+		return nil, fmt.Errorf("invalid type for origin: %s (expected Origin)", origin.Type())
+	}
+
+	w.starlarkCurve = curve
+	if curve == nil {
+		w.Curve = animation.DefaultCurve
+	} else if curveVal, err := CurveFromStarlark(curve); err == nil {
+		w.Curve = curveVal
+	} else {
+		return nil, err
+	}
+
+	w.starlarkRounding = rounding
+	switch rounding {
+	case "round":
+		w.Rounding = animation.Round{}
+	case "floor":
+		w.Rounding = animation.RoundFloor{}
+	case "ceil":
+		w.Rounding = animation.RoundCeil{}
+	case "none":
+		w.Rounding = animation.RoundNone{}
+	case "":
+		w.Rounding = animation.DefaultRounding
+	default:
+		return nil, fmt.Errorf("invalid type for rounding: %s (expected 'round', 'floor', 'ceil' or 'none')", rounding.Type())
+	}
+
+	return w, nil
+}
+
+func (w *Animate) AsRenderWidget() render.Widget {
+	return &w.Animate
+}
+
+func (w *Animate) AttrNames() []string {
+	return []string{
+		"child", "keyframes", "duration", "delay", "origin", "curve", "rounding",
+	}
+}
+
+func (w *Animate) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "child":
+
+		return w.starlarkChild, nil
+
+	case "keyframes":
+
+		return w.starlarkKeyframes, nil
+
+	case "duration":
+
+		return starlark.MakeInt(w.Duration), nil
+
+	case "delay":
+
+		return starlark.MakeInt(w.Delay), nil
+
+	case "origin":
+
+		return w.starlarkOrigin, nil
+
+	case "curve":
+
+		return w.starlarkCurve, nil
+
+	case "rounding":
+
+		return w.starlarkRounding, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *Animate) String() string       { return "Animate(...)" }
+func (w *Animate) Type() string         { return "Animate" }
+func (w *Animate) Freeze()              {}
+func (w *Animate) Truth() starlark.Bool { return true }
+
+func (w *Animate) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
+type AnimatedPositioned struct {
+	Widget
+
+	animation.AnimatedPositioned
+
+	starlarkChild starlark.Value
+
+	starlarkCurve starlark.Value
+}
+
+func newAnimatedPositioned(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		child    starlark.Value
+		xstart   starlark.Int
+		xend     starlark.Int
+		ystart   starlark.Int
+		yend     starlark.Int
+		duration starlark.Int
+		curve    starlark.Value
+		delay    starlark.Int
+		hold     starlark.Int
+	)
+
+	if err := starlark.UnpackArgs(
+		"AnimatedPositioned",
+		args, kwargs,
+		"child?", &child,
+		"xstart?", &xstart,
+		"xend?", &xend,
+		"ystart?", &ystart,
+		"yend?", &yend,
+		"duration?", &duration,
+		"curve?", &curve,
+		"delay?", &delay,
+		"hold?", &hold,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for AnimatedPositioned: %s", err)
+	}
+
+	w := &AnimatedPositioned{}
+
+	if child != nil {
+		childWidget, ok := child.(Widget)
+		if !ok {
+			return nil, fmt.Errorf(
+				"invalid type for child: %s (expected Widget)",
+				child.Type(),
+			)
+		}
+		w.Child = childWidget.AsRenderWidget()
+		w.starlarkChild = child
+	}
+
+	w.XStart = int(xstart.BigInt().Int64())
+
+	w.XEnd = int(xend.BigInt().Int64())
+
+	w.YStart = int(ystart.BigInt().Int64())
+
+	w.YEnd = int(yend.BigInt().Int64())
+
+	w.Duration = int(duration.BigInt().Int64())
+
+	w.starlarkCurve = curve
+	if curve == nil {
+		w.Curve = animation.DefaultCurve
+	} else if curveVal, err := CurveFromStarlark(curve); err == nil {
+		w.Curve = curveVal
+	} else {
+		return nil, err
+	}
+
+	w.Delay = int(delay.BigInt().Int64())
+
+	w.Hold = int(hold.BigInt().Int64())
+
+	return w, nil
+}
+
+func (w *AnimatedPositioned) AsRenderWidget() render.Widget {
+	return &w.AnimatedPositioned
+}
+
+func (w *AnimatedPositioned) AttrNames() []string {
+	return []string{
+		"child", "xstart", "xend", "ystart", "yend", "duration", "curve", "delay", "hold",
+	}
+}
+
+func (w *AnimatedPositioned) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "child":
+
+		return w.starlarkChild, nil
+
+	case "xstart":
+
+		return starlark.MakeInt(w.XStart), nil
+
+	case "xend":
+
+		return starlark.MakeInt(w.XEnd), nil
+
+	case "ystart":
+
+		return starlark.MakeInt(w.YStart), nil
+
+	case "yend":
+
+		return starlark.MakeInt(w.YEnd), nil
+
+	case "duration":
+
+		return starlark.MakeInt(w.Duration), nil
+
+	case "curve":
+
+		return w.starlarkCurve, nil
+
+	case "delay":
+
+		return starlark.MakeInt(w.Delay), nil
+
+	case "hold":
+
+		return starlark.MakeInt(w.Hold), nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *AnimatedPositioned) String() string       { return "AnimatedPositioned(...)" }
+func (w *AnimatedPositioned) Type() string         { return "AnimatedPositioned" }
+func (w *AnimatedPositioned) Freeze()              {}
+func (w *AnimatedPositioned) Truth() starlark.Bool { return true }
+
+func (w *AnimatedPositioned) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
 type Animation struct {
 	Widget
+
 	render.Animation
 
 	starlarkChildren *starlark.List
@@ -139,6 +466,7 @@ func (w *Animation) Attr(name string) (starlark.Value, error) {
 	switch name {
 
 	case "children":
+
 		return w.starlarkChildren, nil
 
 	default:
@@ -156,13 +484,147 @@ func (w *Animation) Hash() (uint32, error) {
 	return uint32(sum), err
 }
 
-type Box struct {
+type Bounce struct {
 	Widget
-	render.Box
 
-	starlarkColor starlark.String
+	animation.Bounce
 
 	starlarkChild starlark.Value
+
+	starlarkCurve starlark.Value
+}
+
+func newBounce(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		child            starlark.Value
+		width            starlark.Int
+		height           starlark.Int
+		bounce_direction starlark.String
+		bounce_always    starlark.Bool
+		pause            starlark.Int
+		curve            starlark.Value
+	)
+
+	if err := starlark.UnpackArgs(
+		"Bounce",
+		args, kwargs,
+		"child", &child,
+		"width?", &width,
+		"height?", &height,
+		"bounce_direction?", &bounce_direction,
+		"bounce_always?", &bounce_always,
+		"pause?", &pause,
+		"curve?", &curve,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for Bounce: %s", err)
+	}
+
+	w := &Bounce{}
+
+	if child != nil {
+		childWidget, ok := child.(Widget)
+		if !ok {
+			return nil, fmt.Errorf(
+				"invalid type for child: %s (expected Widget)",
+				child.Type(),
+			)
+		}
+		w.Child = childWidget.AsRenderWidget()
+		w.starlarkChild = child
+	}
+
+	w.Width = int(width.BigInt().Int64())
+
+	w.Height = int(height.BigInt().Int64())
+
+	w.BounceDirection = bounce_direction.GoString()
+
+	w.BounceAlways = bool(bounce_always)
+
+	w.Pause = int(pause.BigInt().Int64())
+
+	w.starlarkCurve = curve
+	if curve == nil {
+		w.Curve = animation.DefaultCurve
+	} else if curveVal, err := CurveFromStarlark(curve); err == nil {
+		w.Curve = curveVal
+	} else {
+		return nil, err
+	}
+
+	return w, nil
+}
+
+func (w *Bounce) AsRenderWidget() render.Widget {
+	return &w.Bounce
+}
+
+func (w *Bounce) AttrNames() []string {
+	return []string{
+		"child", "width", "height", "bounce_direction", "bounce_always", "pause", "curve",
+	}
+}
+
+func (w *Bounce) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "child":
+
+		return w.starlarkChild, nil
+
+	case "width":
+
+		return starlark.MakeInt(w.Width), nil
+
+	case "height":
+
+		return starlark.MakeInt(w.Height), nil
+
+	case "bounce_direction":
+
+		return starlark.String(w.BounceDirection), nil
+
+	case "bounce_always":
+
+		return starlark.Bool(w.BounceAlways), nil
+
+	case "pause":
+
+		return starlark.MakeInt(w.Pause), nil
+
+	case "curve":
+
+		return w.starlarkCurve, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *Bounce) String() string       { return "Bounce(...)" }
+func (w *Bounce) Type() string         { return "Bounce" }
+func (w *Bounce) Freeze()              {}
+func (w *Bounce) Truth() starlark.Bool { return true }
+
+func (w *Bounce) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
+type Box struct {
+	Widget
+
+	render.Box
+
+	starlarkChild starlark.Value
+
+	starlarkColor starlark.String
 }
 
 func newBox(
@@ -173,13 +635,11 @@ func newBox(
 ) (starlark.Value, error) {
 
 	var (
+		child   starlark.Value
 		width   starlark.Int
 		height  starlark.Int
 		padding starlark.Int
-
-		color starlark.String
-
-		child starlark.Value
+		color   starlark.String
 	)
 
 	if err := starlark.UnpackArgs(
@@ -195,18 +655,6 @@ func newBox(
 	}
 
 	w := &Box{}
-	w.Width = int(width.BigInt().Int64())
-	w.Height = int(height.BigInt().Int64())
-	w.Padding = int(padding.BigInt().Int64())
-
-	w.starlarkColor = color
-	if color.Len() > 0 {
-		c, err := render.ParseColor(color.GoString())
-		if err != nil {
-			return nil, fmt.Errorf("color is not a valid hex string: %s", color.String())
-		}
-		w.Color = c
-	}
 
 	if child != nil {
 		childWidget, ok := child.(Widget)
@@ -218,6 +666,20 @@ func newBox(
 		}
 		w.Child = childWidget.AsRenderWidget()
 		w.starlarkChild = child
+	}
+
+	w.Width = int(width.BigInt().Int64())
+
+	w.Height = int(height.BigInt().Int64())
+
+	w.Padding = int(padding.BigInt().Int64())
+
+	if color.Len() > 0 {
+		c, err := render.ParseColor(color.GoString())
+		if err != nil {
+			return nil, fmt.Errorf("color is not a valid hex string: %s", color.String())
+		}
+		w.Color = c
 	}
 
 	return w, nil
@@ -236,20 +698,25 @@ func (w *Box) AttrNames() []string {
 func (w *Box) Attr(name string) (starlark.Value, error) {
 	switch name {
 
+	case "child":
+
+		return w.starlarkChild, nil
+
 	case "width":
+
 		return starlark.MakeInt(w.Width), nil
 
 	case "height":
+
 		return starlark.MakeInt(w.Height), nil
 
 	case "padding":
+
 		return starlark.MakeInt(w.Padding), nil
 
 	case "color":
-		return w.starlarkColor, nil
 
-	case "child":
-		return w.starlarkChild, nil
+		return w.starlarkColor, nil
 
 	default:
 		return nil, nil
@@ -268,6 +735,7 @@ func (w *Box) Hash() (uint32, error) {
 
 type Circle struct {
 	Widget
+
 	render.Circle
 
 	starlarkColor starlark.String
@@ -283,11 +751,9 @@ func newCircle(
 ) (starlark.Value, error) {
 
 	var (
+		color    starlark.String
 		diameter starlark.Int
-
-		color starlark.String
-
-		child starlark.Value
+		child    starlark.Value
 	)
 
 	if err := starlark.UnpackArgs(
@@ -301,9 +767,7 @@ func newCircle(
 	}
 
 	w := &Circle{}
-	w.Diameter = int(diameter.BigInt().Int64())
 
-	w.starlarkColor = color
 	if color.Len() > 0 {
 		c, err := render.ParseColor(color.GoString())
 		if err != nil {
@@ -311,6 +775,8 @@ func newCircle(
 		}
 		w.Color = c
 	}
+
+	w.Diameter = int(diameter.BigInt().Int64())
 
 	if child != nil {
 		childWidget, ok := child.(Widget)
@@ -340,13 +806,16 @@ func (w *Circle) AttrNames() []string {
 func (w *Circle) Attr(name string) (starlark.Value, error) {
 	switch name {
 
-	case "diameter":
-		return starlark.MakeInt(w.Diameter), nil
-
 	case "color":
+
 		return w.starlarkColor, nil
 
+	case "diameter":
+
+		return starlark.MakeInt(w.Diameter), nil
+
 	case "child":
+
 		return w.starlarkChild, nil
 
 	default:
@@ -366,6 +835,7 @@ func (w *Circle) Hash() (uint32, error) {
 
 type Column struct {
 	Widget
+
 	render.Column
 
 	starlarkChildren *starlark.List
@@ -379,12 +849,10 @@ func newColumn(
 ) (starlark.Value, error) {
 
 	var (
+		children    *starlark.List
 		main_align  starlark.String
 		cross_align starlark.String
-
-		expanded starlark.Bool
-
-		children *starlark.List
+		expanded    starlark.Bool
 	)
 
 	if err := starlark.UnpackArgs(
@@ -399,9 +867,6 @@ func newColumn(
 	}
 
 	w := &Column{}
-	w.MainAlign = main_align.GoString()
-	w.CrossAlign = cross_align.GoString()
-	w.Expanded = bool(expanded)
 
 	var childrenVal starlark.Value
 	childrenIter := children.Iterate()
@@ -424,6 +889,12 @@ func newColumn(
 	}
 	w.starlarkChildren = children
 
+	w.MainAlign = main_align.GoString()
+
+	w.CrossAlign = cross_align.GoString()
+
+	w.Expanded = bool(expanded)
+
 	return w, nil
 }
 
@@ -440,17 +911,21 @@ func (w *Column) AttrNames() []string {
 func (w *Column) Attr(name string) (starlark.Value, error) {
 	switch name {
 
+	case "children":
+
+		return w.starlarkChildren, nil
+
 	case "main_align":
+
 		return starlark.String(w.MainAlign), nil
 
 	case "cross_align":
+
 		return starlark.String(w.CrossAlign), nil
 
 	case "expanded":
-		return starlark.Bool(w.Expanded), nil
 
-	case "children":
-		return w.starlarkChildren, nil
+		return starlark.Bool(w.Expanded), nil
 
 	default:
 		return nil, nil
@@ -469,6 +944,7 @@ func (w *Column) Hash() (uint32, error) {
 
 type Image struct {
 	Widget
+
 	render.Image
 
 	size *starlark.Builtin
@@ -482,8 +958,7 @@ func newImage(
 ) (starlark.Value, error) {
 
 	var (
-		src starlark.String
-
+		src    starlark.String
 		width  starlark.Int
 		height starlark.Int
 	)
@@ -499,8 +974,11 @@ func newImage(
 	}
 
 	w := &Image{}
+
 	w.Src = src.GoString()
+
 	w.Width = int(width.BigInt().Int64())
+
 	w.Height = int(height.BigInt().Int64())
 
 	w.size = starlark.NewBuiltin("size", imageSize)
@@ -526,15 +1004,19 @@ func (w *Image) Attr(name string) (starlark.Value, error) {
 	switch name {
 
 	case "src":
+
 		return starlark.String(w.Src), nil
 
 	case "width":
+
 		return starlark.MakeInt(w.Width), nil
 
 	case "height":
+
 		return starlark.MakeInt(w.Height), nil
 
 	case "delay":
+
 		return starlark.MakeInt(w.Delay), nil
 
 	case "size":
@@ -570,8 +1052,100 @@ func imageSize(
 	}), nil
 }
 
+type Keyframe struct {
+	animation.Keyframe
+
+	starlarkPercentage starlark.Value
+
+	starlarkTransforms *starlark.List
+}
+
+func newKeyframe(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		percentage starlark.Value
+		transforms *starlark.List
+	)
+
+	if err := starlark.UnpackArgs(
+		"Keyframe",
+		args, kwargs,
+		"percentage", &percentage,
+		"transforms", &transforms,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for Keyframe: %s", err)
+	}
+
+	w := &Keyframe{}
+
+	w.starlarkPercentage = percentage
+	{
+
+		if val, err := NumberOrPercentageFromStarlark(percentage, 0.0, 1.0, map[string]float64{"from": 0.0, "to": 1.0}); err == nil {
+
+			w.Percentage = val
+		} else {
+			return nil, err
+		}
+	}
+
+	w.starlarkTransforms = transforms
+	for i := 0; i < transforms.Len(); i++ {
+		switch transformsVal := transforms.Index(i).(type) {
+		case *Translate:
+			w.Transforms = append(w.Transforms, transformsVal.Translate)
+		case *Scale:
+			w.Transforms = append(w.Transforms, transformsVal.Scale)
+		case *Rotate:
+			w.Transforms = append(w.Transforms, transformsVal.Rotate)
+		default:
+			return nil, fmt.Errorf("expected transform, but got '%s'", transformsVal.Type())
+		}
+	}
+
+	return w, nil
+}
+
+func (w *Keyframe) AttrNames() []string {
+	return []string{
+		"percentage", "transforms",
+	}
+}
+
+func (w *Keyframe) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "percentage":
+
+		return w.starlarkPercentage, nil
+
+	case "transforms":
+
+		return w.starlarkTransforms, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *Keyframe) String() string       { return "Keyframe(...)" }
+func (w *Keyframe) Type() string         { return "Keyframe" }
+func (w *Keyframe) Freeze()              {}
+func (w *Keyframe) Truth() starlark.Bool { return true }
+
+func (w *Keyframe) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
 type Marquee struct {
 	Widget
+
 	render.Marquee
 
 	starlarkChild starlark.Value
@@ -585,14 +1159,12 @@ func newMarquee(
 ) (starlark.Value, error) {
 
 	var (
+		child            starlark.Value
+		width            starlark.Int
+		height           starlark.Int
+		offset_start     starlark.Int
+		offset_end       starlark.Int
 		scroll_direction starlark.String
-
-		width        starlark.Int
-		height       starlark.Int
-		offset_start starlark.Int
-		offset_end   starlark.Int
-
-		child starlark.Value
 	)
 
 	if err := starlark.UnpackArgs(
@@ -609,11 +1181,6 @@ func newMarquee(
 	}
 
 	w := &Marquee{}
-	w.ScrollDirection = scroll_direction.GoString()
-	w.Width = int(width.BigInt().Int64())
-	w.Height = int(height.BigInt().Int64())
-	w.OffsetStart = int(offset_start.BigInt().Int64())
-	w.OffsetEnd = int(offset_end.BigInt().Int64())
 
 	if child != nil {
 		childWidget, ok := child.(Widget)
@@ -626,6 +1193,16 @@ func newMarquee(
 		w.Child = childWidget.AsRenderWidget()
 		w.starlarkChild = child
 	}
+
+	w.Width = int(width.BigInt().Int64())
+
+	w.Height = int(height.BigInt().Int64())
+
+	w.OffsetStart = int(offset_start.BigInt().Int64())
+
+	w.OffsetEnd = int(offset_end.BigInt().Int64())
+
+	w.ScrollDirection = scroll_direction.GoString()
 
 	return w, nil
 }
@@ -643,23 +1220,29 @@ func (w *Marquee) AttrNames() []string {
 func (w *Marquee) Attr(name string) (starlark.Value, error) {
 	switch name {
 
-	case "scroll_direction":
-		return starlark.String(w.ScrollDirection), nil
+	case "child":
+
+		return w.starlarkChild, nil
 
 	case "width":
+
 		return starlark.MakeInt(w.Width), nil
 
 	case "height":
+
 		return starlark.MakeInt(w.Height), nil
 
 	case "offset_start":
+
 		return starlark.MakeInt(w.OffsetStart), nil
 
 	case "offset_end":
+
 		return starlark.MakeInt(w.OffsetEnd), nil
 
-	case "child":
-		return w.starlarkChild, nil
+	case "scroll_direction":
+
+		return starlark.String(w.ScrollDirection), nil
 
 	default:
 		return nil, nil
@@ -676,15 +1259,104 @@ func (w *Marquee) Hash() (uint32, error) {
 	return uint32(sum), err
 }
 
+type Origin struct {
+	animation.Origin
+
+	starlarkX starlark.Value
+
+	starlarkY starlark.Value
+}
+
+func newOrigin(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		x starlark.Value
+		y starlark.Value
+	)
+
+	if err := starlark.UnpackArgs(
+		"Origin",
+		args, kwargs,
+		"x", &x,
+		"y", &y,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for Origin: %s", err)
+	}
+
+	w := &Origin{}
+
+	w.starlarkX = x
+	{
+
+		if val, err := NumberOrPercentageFromStarlark(x, -math.MaxFloat64, math.MaxFloat64, map[string]float64{"left": 0.0, "center": 0.5, "right": 1.0}); err == nil {
+
+			w.X = val
+		} else {
+			return nil, err
+		}
+	}
+
+	w.starlarkY = y
+	{
+
+		if val, err := NumberOrPercentageFromStarlark(y, -math.MaxFloat64, math.MaxFloat64, map[string]float64{"top": 0.0, "center": 0.5, "bottom": 1.0}); err == nil {
+
+			w.Y = val
+		} else {
+			return nil, err
+		}
+	}
+
+	return w, nil
+}
+
+func (w *Origin) AttrNames() []string {
+	return []string{
+		"x", "y",
+	}
+}
+
+func (w *Origin) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "x":
+
+		return w.starlarkX, nil
+
+	case "y":
+
+		return w.starlarkY, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *Origin) String() string       { return "Origin(...)" }
+func (w *Origin) Type() string         { return "Origin" }
+func (w *Origin) Freeze()              {}
+func (w *Origin) Truth() starlark.Bool { return true }
+
+func (w *Origin) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
 type Padding struct {
 	Widget
-	render.Padding
 
-	starlarkColor starlark.String
+	render.Padding
 
 	starlarkChild starlark.Value
 
 	starlarkPad starlark.Value
+
+	starlarkColor starlark.String
 }
 
 func newPadding(
@@ -695,13 +1367,10 @@ func newPadding(
 ) (starlark.Value, error) {
 
 	var (
+		child    starlark.Value
+		pad      starlark.Value
 		expanded starlark.Bool
-
-		color starlark.String
-
-		child starlark.Value
-
-		pad starlark.Value
+		color    starlark.String
 	)
 
 	if err := starlark.UnpackArgs(
@@ -716,16 +1385,6 @@ func newPadding(
 	}
 
 	w := &Padding{}
-	w.Expanded = bool(expanded)
-
-	w.starlarkColor = color
-	if color.Len() > 0 {
-		c, err := render.ParseColor(color.GoString())
-		if err != nil {
-			return nil, fmt.Errorf("color is not a valid hex string: %s", color.String())
-		}
-		w.Color = c
-	}
 
 	if child != nil {
 		childWidget, ok := child.(Widget)
@@ -771,6 +1430,16 @@ func newPadding(
 		return nil, fmt.Errorf("pad must be int or 4-tuple of int")
 	}
 
+	w.Expanded = bool(expanded)
+
+	if color.Len() > 0 {
+		c, err := render.ParseColor(color.GoString())
+		if err != nil {
+			return nil, fmt.Errorf("color is not a valid hex string: %s", color.String())
+		}
+		w.Color = c
+	}
+
 	return w, nil
 }
 
@@ -787,17 +1456,21 @@ func (w *Padding) AttrNames() []string {
 func (w *Padding) Attr(name string) (starlark.Value, error) {
 	switch name {
 
-	case "color":
-		return w.starlarkColor, nil
-
-	case "expanded":
-		return starlark.Bool(w.Expanded), nil
-
 	case "child":
+
 		return w.starlarkChild, nil
 
 	case "pad":
+
 		return w.starlarkPad, nil
+
+	case "expanded":
+
+		return starlark.Bool(w.Expanded), nil
+
+	case "color":
+
+		return w.starlarkColor, nil
 
 	default:
 		return nil, nil
@@ -814,8 +1487,74 @@ func (w *Padding) Hash() (uint32, error) {
 	return uint32(sum), err
 }
 
+type Rotate struct {
+	animation.Rotate
+
+	starlarkAngle starlark.Value
+}
+
+func newRotate(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		angle starlark.Value
+	)
+
+	if err := starlark.UnpackArgs(
+		"Rotate",
+		args, kwargs,
+		"angle", &angle,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for Rotate: %s", err)
+	}
+
+	w := &Rotate{}
+
+	w.starlarkAngle = angle
+	if val, ok := starlark.AsFloat(w.starlarkAngle); ok {
+		w.Angle = val
+	} else {
+		return nil, fmt.Errorf("expected number, but got: %s", w.starlarkAngle.String())
+	}
+
+	return w, nil
+}
+
+func (w *Rotate) AttrNames() []string {
+	return []string{
+		"angle",
+	}
+}
+
+func (w *Rotate) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "angle":
+
+		return w.starlarkAngle, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *Rotate) String() string       { return "Rotate(...)" }
+func (w *Rotate) Type() string         { return "Rotate" }
+func (w *Rotate) Freeze()              {}
+func (w *Rotate) Truth() starlark.Bool { return true }
+
+func (w *Rotate) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
 type Row struct {
 	Widget
+
 	render.Row
 
 	starlarkChildren *starlark.List
@@ -829,12 +1568,10 @@ func newRow(
 ) (starlark.Value, error) {
 
 	var (
+		children    *starlark.List
 		main_align  starlark.String
 		cross_align starlark.String
-
-		expanded starlark.Bool
-
-		children *starlark.List
+		expanded    starlark.Bool
 	)
 
 	if err := starlark.UnpackArgs(
@@ -849,9 +1586,6 @@ func newRow(
 	}
 
 	w := &Row{}
-	w.MainAlign = main_align.GoString()
-	w.CrossAlign = cross_align.GoString()
-	w.Expanded = bool(expanded)
 
 	var childrenVal starlark.Value
 	childrenIter := children.Iterate()
@@ -874,6 +1608,12 @@ func newRow(
 	}
 	w.starlarkChildren = children
 
+	w.MainAlign = main_align.GoString()
+
+	w.CrossAlign = cross_align.GoString()
+
+	w.Expanded = bool(expanded)
+
 	return w, nil
 }
 
@@ -890,17 +1630,21 @@ func (w *Row) AttrNames() []string {
 func (w *Row) Attr(name string) (starlark.Value, error) {
 	switch name {
 
+	case "children":
+
+		return w.starlarkChildren, nil
+
 	case "main_align":
+
 		return starlark.String(w.MainAlign), nil
 
 	case "cross_align":
+
 		return starlark.String(w.CrossAlign), nil
 
 	case "expanded":
-		return starlark.Bool(w.Expanded), nil
 
-	case "children":
-		return w.starlarkChildren, nil
+		return starlark.Bool(w.Expanded), nil
 
 	default:
 		return nil, nil
@@ -917,8 +1661,89 @@ func (w *Row) Hash() (uint32, error) {
 	return uint32(sum), err
 }
 
+type Scale struct {
+	animation.Scale
+
+	starlarkX starlark.Value
+
+	starlarkY starlark.Value
+}
+
+func newScale(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		x starlark.Value
+		y starlark.Value
+	)
+
+	if err := starlark.UnpackArgs(
+		"Scale",
+		args, kwargs,
+		"x", &x,
+		"y", &y,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for Scale: %s", err)
+	}
+
+	w := &Scale{}
+
+	w.starlarkX = x
+	if val, ok := starlark.AsFloat(w.starlarkX); ok {
+		w.X = val
+	} else {
+		return nil, fmt.Errorf("expected number, but got: %s", w.starlarkX.String())
+	}
+
+	w.starlarkY = y
+	if val, ok := starlark.AsFloat(w.starlarkY); ok {
+		w.Y = val
+	} else {
+		return nil, fmt.Errorf("expected number, but got: %s", w.starlarkY.String())
+	}
+
+	return w, nil
+}
+
+func (w *Scale) AttrNames() []string {
+	return []string{
+		"x", "y",
+	}
+}
+
+func (w *Scale) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "x":
+
+		return w.starlarkX, nil
+
+	case "y":
+
+		return w.starlarkY, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *Scale) String() string       { return "Scale(...)" }
+func (w *Scale) Type() string         { return "Scale" }
+func (w *Scale) Freeze()              {}
+func (w *Scale) Truth() starlark.Bool { return true }
+
+func (w *Scale) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
 type Stack struct {
 	Widget
+
 	render.Stack
 
 	starlarkChildren *starlark.List
@@ -983,6 +1808,7 @@ func (w *Stack) Attr(name string) (starlark.Value, error) {
 	switch name {
 
 	case "children":
+
 		return w.starlarkChildren, nil
 
 	default:
@@ -1002,6 +1828,7 @@ func (w *Stack) Hash() (uint32, error) {
 
 type Text struct {
 	Widget
+
 	render.Text
 
 	starlarkColor starlark.String
@@ -1022,8 +1849,7 @@ func newText(
 
 		height starlark.Int
 		offset starlark.Int
-
-		color starlark.String
+		color  starlark.String
 	)
 
 	if err := starlark.UnpackArgs(
@@ -1039,12 +1865,15 @@ func newText(
 	}
 
 	w := &Text{}
+
 	w.Content = content.GoString()
+
 	w.Font = font.GoString()
+
 	w.Height = int(height.BigInt().Int64())
+
 	w.Offset = int(offset.BigInt().Int64())
 
-	w.starlarkColor = color
 	if color.Len() > 0 {
 		c, err := render.ParseColor(color.GoString())
 		if err != nil {
@@ -1068,7 +1897,7 @@ func (w *Text) AsRenderWidget() render.Widget {
 
 func (w *Text) AttrNames() []string {
 	return []string{
-		"content", "font", "height", "offset", "color",
+		"content", "font", "width", "height", "offset", "color",
 	}
 }
 
@@ -1076,18 +1905,27 @@ func (w *Text) Attr(name string) (starlark.Value, error) {
 	switch name {
 
 	case "content":
+
 		return starlark.String(w.Content), nil
 
 	case "font":
+
 		return starlark.String(w.Font), nil
 
+	case "width":
+
+		return starlark.MakeInt(w.Width), nil
+
 	case "height":
+
 		return starlark.MakeInt(w.Height), nil
 
 	case "offset":
+
 		return starlark.MakeInt(w.Offset), nil
 
 	case "color":
+
 		return w.starlarkColor, nil
 
 	case "size":
@@ -1123,8 +1961,89 @@ func textSize(
 	}), nil
 }
 
+type Translate struct {
+	animation.Translate
+
+	starlarkX starlark.Value
+
+	starlarkY starlark.Value
+}
+
+func newTranslate(
+	thread *starlark.Thread,
+	_ *starlark.Builtin,
+	args starlark.Tuple,
+	kwargs []starlark.Tuple,
+) (starlark.Value, error) {
+
+	var (
+		x starlark.Value
+		y starlark.Value
+	)
+
+	if err := starlark.UnpackArgs(
+		"Translate",
+		args, kwargs,
+		"x", &x,
+		"y", &y,
+	); err != nil {
+		return nil, fmt.Errorf("unpacking arguments for Translate: %s", err)
+	}
+
+	w := &Translate{}
+
+	w.starlarkX = x
+	if val, ok := starlark.AsFloat(w.starlarkX); ok {
+		w.X = val
+	} else {
+		return nil, fmt.Errorf("expected number, but got: %s", w.starlarkX.String())
+	}
+
+	w.starlarkY = y
+	if val, ok := starlark.AsFloat(w.starlarkY); ok {
+		w.Y = val
+	} else {
+		return nil, fmt.Errorf("expected number, but got: %s", w.starlarkY.String())
+	}
+
+	return w, nil
+}
+
+func (w *Translate) AttrNames() []string {
+	return []string{
+		"x", "y",
+	}
+}
+
+func (w *Translate) Attr(name string) (starlark.Value, error) {
+	switch name {
+
+	case "x":
+
+		return w.starlarkX, nil
+
+	case "y":
+
+		return w.starlarkY, nil
+
+	default:
+		return nil, nil
+	}
+}
+
+func (w *Translate) String() string       { return "Translate(...)" }
+func (w *Translate) Type() string         { return "Translate" }
+func (w *Translate) Freeze()              {}
+func (w *Translate) Truth() starlark.Bool { return true }
+
+func (w *Translate) Hash() (uint32, error) {
+	sum, err := hashstructure.Hash(w, hashstructure.FormatV2, nil)
+	return uint32(sum), err
+}
+
 type WrappedText struct {
 	Widget
+
 	render.WrappedText
 
 	starlarkColor starlark.String
@@ -1138,14 +2057,12 @@ func newWrappedText(
 ) (starlark.Value, error) {
 
 	var (
-		content starlark.String
-		font    starlark.String
-
+		content     starlark.String
+		font        starlark.String
 		height      starlark.Int
 		width       starlark.Int
 		linespacing starlark.Int
-
-		color starlark.String
+		color       starlark.String
 	)
 
 	if err := starlark.UnpackArgs(
@@ -1162,13 +2079,17 @@ func newWrappedText(
 	}
 
 	w := &WrappedText{}
+
 	w.Content = content.GoString()
+
 	w.Font = font.GoString()
+
 	w.Height = int(height.BigInt().Int64())
+
 	w.Width = int(width.BigInt().Int64())
+
 	w.LineSpacing = int(linespacing.BigInt().Int64())
 
-	w.starlarkColor = color
 	if color.Len() > 0 {
 		c, err := render.ParseColor(color.GoString())
 		if err != nil {
@@ -1194,21 +2115,27 @@ func (w *WrappedText) Attr(name string) (starlark.Value, error) {
 	switch name {
 
 	case "content":
+
 		return starlark.String(w.Content), nil
 
 	case "font":
+
 		return starlark.String(w.Font), nil
 
 	case "height":
+
 		return starlark.MakeInt(w.Height), nil
 
 	case "width":
+
 		return starlark.MakeInt(w.Width), nil
 
 	case "linespacing":
+
 		return starlark.MakeInt(w.LineSpacing), nil
 
 	case "color":
+
 		return w.starlarkColor, nil
 
 	default:

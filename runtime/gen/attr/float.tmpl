@@ -1,0 +1,8 @@
+{{if not .ReadOnly}}
+	w.starlark{{.Render}} = {{.Starlark}}
+	if val, ok := starlark.AsFloat(w.starlark{{.Render}}); ok {
+		w.{{.Render}} = val
+	} else  {
+		return nil, fmt.Errorf("expected number, but got: %s", w.starlark{{.Render}}.String())
+	}
+{{end}}

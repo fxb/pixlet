@@ -1,0 +1,10 @@
+{{if not .ReadOnly}}
+	w.starlark{{.Render}} = {{.Starlark}}
+	if {{.Starlark}} == nil {
+		w.{{.Render}} = animation.DefaultCurve
+	} else if {{.Starlark}}Val, err := CurveFromStarlark({{.Starlark}}); err == nil {
+		w.{{.Render}} = {{.Starlark}}Val
+	} else {
+		return nil, err
+	}
+{{end}}

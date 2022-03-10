@@ -1,20 +1,12 @@
 type {{.Name}} struct {
-	Widget
+{{if .SuperName}}
+	{{.SuperName}}
+{{end}}
 	{{.FullName}}
-{{range .AttrColor}}
-	starlark{{.Render}} starlark.String
+{{range .Attr}}
+{{if or .StarlarkField (eq .Type "starlark.Value") (eq .Type "*starlark.List")}}
+	starlark{{.Render}} {{.Type}}
 {{end}}
-{{range .AttrCurve}}
-	starlark{{.Render}} starlark.Value
-{{end}}
-{{range .AttrChild}}
-	starlark{{.Render}} starlark.Value
-{{end}}
-{{range .AttrChildren}}
-	starlark{{.Render}} *starlark.List
-{{end}}
-{{range .AttrInsets}}
-	starlark{{.Render}} starlark.Value
 {{end}}
 {{if .HasSize}}
 	size *starlark.Builtin
@@ -29,28 +21,14 @@ func new{{.Name}}(
 ) (starlark.Value, error) {
 
 	var (
-		{{range .AttrString}}{{if not .ReadOnly}}{{.Starlark}} starlark.String{{end}}
-		{{end}}
-		{{range .AttrInt}}{{if not .ReadOnly}}{{.Starlark}} starlark.Int{{end}}
-		{{end}}
-		{{range .AttrBool}}{{if not .ReadOnly}}{{.Starlark}} starlark.Bool{{end}}
-		{{end}}
-		{{range .AttrColor}}{{if not .ReadOnly}}{{.Starlark}} starlark.String{{end}}
-		{{end}}
-		{{range .AttrCurve}}{{if not .ReadOnly}}{{.Starlark}} starlark.Value{{end}}
-		{{end}}
-		{{range .AttrChild}}{{if not .ReadOnly}}{{.Starlark}} starlark.Value{{end}}
-		{{end}}
-		{{range .AttrChildren}}{{if not .ReadOnly}}{{.Starlark}} *starlark.List{{end}}
-		{{end}}
-		{{range .AttrInsets}}{{if not .ReadOnly}}{{.Starlark}} starlark.Value{{end}}
+		{{range .Attr}}{{if not .ReadOnly}}{{.Starlark}} {{.Type}}{{end}}
 		{{end}}
 	)
 
 	if err := starlark.UnpackArgs(
 		"{{.Name}}",
 		args, kwargs,
-{{- range .AttrAll}}{{if not .ReadOnly}}
+{{- range .Attr}}{{if not .ReadOnly}}
 		"{{.Starlark}}{{if not .Required}}?{{end}}", &{{.Starlark}},
 {{- end}}{{end}}
 	); err != nil {
@@ -58,105 +36,10 @@ func new{{.Name}}(
 	}
 
 	w := &{{.Name}}{}
-	{{range .AttrString}}{{if not .ReadOnly}}w.{{.Render}} = {{.Starlark}}.GoString(){{end}}
-	{{end}}
-	{{- range .AttrBool}}{{if not .ReadOnly}}w.{{.Render}} = bool({{.Starlark}}){{end}}
-	{{end}}
-	{{- range .AttrInt}}{{if not .ReadOnly}}w.{{.Render}} = int({{.Starlark}}.BigInt().Int64()){{end}}
-	{{end}}
 
-{{range .AttrColor}}{{if not .ReadOnly}}
-	w.starlark{{.Render}} = {{.Starlark}}
-	if {{.Starlark}}.Len() > 0 {
-		c, err := render.ParseColor({{.Starlark}}.GoString())
-		if err != nil {
-			return nil, fmt.Errorf("{{.Starlark}} is not a valid hex string: %s", {{.Starlark}}.String())
-		}
-		w.{{.Render}} = c
-	}
-{{end}}{{end}}
-
-{{range .AttrCurve}}{{if not .ReadOnly}}
-	w.starlark{{.Render}} = {{.Starlark}}
-	{
-		var err error
-		w.{{.Render}}, err = animation.CurveFromStarlark({{.Starlark}})
-		if err != nil {
-			return nil, fmt.Errorf("invalid type for {{.Starlark}}: %s (expected string or function)")
-		}
-	}
-{{end}}{{end}}
-
-{{range .AttrChild}}{{if not .ReadOnly}}
-	if {{.Starlark}} != nil {
-		{{.Starlark}}Widget, ok := {{.Starlark}}.(Widget)
-		if !ok {
-			return nil, fmt.Errorf(
-				"invalid type for {{.Starlark}}: %s (expected Widget)",
-				{{.Starlark}}.Type(),
-			)
-		}
-		w.{{.Render}} = {{.Starlark}}Widget.AsRenderWidget()
-		w.starlark{{.Render}} = {{.Starlark}}
-	}
-{{end}}{{end}}
-
-{{range .AttrChildren}}{{if not .ReadOnly}}
-	var {{.Starlark}}Val starlark.Value
-	{{.Starlark}}Iter := {{.Starlark}}.Iterate()
-	defer {{.Starlark}}Iter.Done()
-	for i := 0; {{.Starlark}}Iter.Next(&{{.Starlark}}Val);  {
-		if _, isNone := {{.Starlark}}Val.(starlark.NoneType); isNone {
-			continue
-		}
-
-		{{.Starlark}}Child, ok := {{.Starlark}}Val.(Widget)
-		if !ok {
-			return nil, fmt.Errorf(
-				"expected {{.Starlark}} to be a list of Widget but found: %s (at index %d)",
-				{{.Starlark}}Val.Type(),
-				i,
-			)
-		}
-
-		w.{{.Render}} = append(w.{{.Render}}, {{.Starlark}}Child.AsRenderWidget())
-	}
-	w.starlark{{.Render}} = {{.Starlark}}
-{{end}}{{end}}
-
-{{range .AttrInsets}}{{if not .ReadOnly}}
-	w.starlark{{.Render}} = {{.Starlark}}
-	switch {{.Starlark}}Val := {{.Starlark}}.(type) {
-	case starlark.Int:
-		{{.Starlark}}Int := int({{.Starlark}}Val.BigInt().Int64())
-		w.{{.Render}}.Left = {{.Starlark}}Int
-		w.{{.Render}}.Top = {{.Starlark}}Int
-		w.{{.Render}}.Right = {{.Starlark}}Int
-		w.{{.Render}}.Bottom = {{.Starlark}}Int
-	case starlark.Tuple:
-		{{.Starlark}}List := []starlark.Value({{.Starlark}}Val)
-		if len({{.Starlark}}List) != 4 {
-			return nil, fmt.Errorf(
-				"{{.Starlark}} tuple must hold 4 elements (left, top, right, bottom), found %d",
-				len({{.Starlark}}List),
-			)
-		}
-		{{.Starlark}}ListInt := make([]starlark.Int, 4)
-		for i := 0; i < 4; i++ {
-			pi, ok := {{.Starlark}}List[i].(starlark.Int)
-			if !ok {
-				return nil, fmt.Errorf("{{.Starlark}} element %d is not int", i)
-			}
-			{{.Starlark}}ListInt[i] = pi
-		}
-		w.{{.Render}}.Left = int({{.Starlark}}ListInt[0].BigInt().Int64())
-		w.{{.Render}}.Top = int({{.Starlark}}ListInt[1].BigInt().Int64())
-		w.{{.Render}}.Right = int({{.Starlark}}ListInt[2].BigInt().Int64())
-		w.{{.Render}}.Bottom = int({{.Starlark}}ListInt[3].BigInt().Int64())
-	default:
-		return nil, fmt.Errorf("{{.Starlark}} must be int or 4-tuple of int")
-	}
-{{end}}{{end}}
+{{range .Attr}}
+{{.Code}}
+{{end}}
 
 {{if .HasSize}}
 	w.size = starlark.NewBuiltin("size", {{.Name|ToLower}}Size)
@@ -171,13 +54,15 @@ func new{{.Name}}(
 	return w, nil
 }
 
+{{if eq .SuperName "Widget" }}
 func (w *{{.Name}}) AsRenderWidget() render.Widget {
 	return &w.{{.Name}}
 }
+{{end}}
 
 func (w *{{.Name}}) AttrNames() []string {
 	return []string{
-{{range .AttrAll -}}
+{{range .Attr -}}
 		"{{.Starlark}}",
 {{- end}}
 	}
@@ -185,37 +70,19 @@ func (w *{{.Name}}) AttrNames() []string {
 
 func (w *{{.Name}}) Attr(name string) (starlark.Value, error) {
 	switch name {
-{{range .AttrString}}
+{{range .Attr}}
 	case "{{.Starlark}}":
+{{if .StarlarkField}}
+		return w.starlark{{.Render}}, nil
+{{else if eq .Type "starlark.String"}}
 		return starlark.String(w.{{.Render}}), nil
-{{end}}
-{{range .AttrInt}}
-	case "{{.Starlark}}":
+{{else if eq .Type "starlark.Int"}}
 		return starlark.MakeInt(w.{{.Render}}), nil
-{{end}}
-{{range .AttrColor}}
-	case "{{.Starlark}}":
-		return w.starlark{{.Render}}, nil
-{{end}}
-{{range .AttrCurve}}
-	case "{{.Starlark}}":
-		return w.starlark{{.Render}}, nil
-{{end}}
-{{range .AttrBool}}
-	case "{{.Starlark}}":
+{{else if eq .Type "starlark.Bool"}}
 		return starlark.Bool(w.{{.Render}}), nil
-{{end}}
-{{range .AttrChildren}}
-	case "{{.Starlark}}":
+{{else}}
 		return w.starlark{{.Render}}, nil
 {{end}}
-{{range .AttrChild}}
-	case "{{.Starlark}}":
-		return w.starlark{{.Render}}, nil
-{{end}}
-{{range .AttrInsets}}
-	case "{{.Starlark}}":
-		return w.starlark{{.Render}}, nil
 {{end}}
 {{if .HasSize}}
 	case "size":

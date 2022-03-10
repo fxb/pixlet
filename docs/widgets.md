@@ -15,6 +15,40 @@ hexdecimal color specification.  Pixlet supports "#rgb", "#rrggbb",
 "#rgba", and "#rrggbbaa" color specifications.
 
 
+## Animate
+Animate is a widget that does keyframe animations by interpolating
+between transforms for a child widget.
+
+It supports animating translation, scale and rotation of its child.
+
+#### Attributes
+| Name | Type | Description | Required |
+| --- | --- | --- | --- |
+| `child` | `Widget` | Widget to animate | **Y** |
+| `keyframes` | `[Keyframe]` | List of animation keyframes | **Y** |
+| `duration` | `int` | Duration of animation in frames | **Y** |
+| `delay` | `int` | Delay of animation in frames | N |
+| `origin` | `Origin` | Origin for transforms, default is '50%, 50%' | N |
+| `curve` | `str / function` | Easing curve to use, default is 'linear' | N |
+| `rounding` | `str` | Rounding to use for interpolated translation coordinates (not used for scale and rotate), default is 'round' | N |
+
+#### Example
+```
+render.Animate(
+  child = render.Box(render.Circle(diameter = 6, color = "#0f0")),
+  duration = 100,
+  delay = 0,
+  curve = "linear",
+  origin = render.Origin("50%", "50%"),
+  keyframes = [
+    render.Keyframe("from", [render.Rotate(0), render.Translate(-10, 0), render.Rotate(0)]),
+    render.Keyframe("to", [render.Rotate(360), render.Translate(-10, 0), render.Rotate(-360)]),
+  ],
+),
+```
+![](img/widget_Animate_0.gif)
+
+
 ## Animation
 Animations turns a list of children into an animation, where each
 child is a frame.
@@ -25,7 +59,7 @@ weird. Think and fix.
 #### Attributes
 | Name | Type | Description | Required |
 | --- | --- | --- | --- |
-| `children` | `list` | Children to use as frames in the animation | N |
+| `children` | `[Widget]` | Children to use as frames in the animation | N |
 
 #### Example
 ```
@@ -40,6 +74,50 @@ render.Animation(
 )
 ```
 ![](img/widget_Animation_0.gif)
+
+
+## Bounce
+Bounce moves its child horizontally or vertically.
+
+The `bounce_direction` will be 'horizontal' and will move from right
+to left if left empty, if specified as 'vertical' the Bounce will
+will move from bottom to top.
+
+In horizontal mode the height of the Bounce will be that of its child,
+but its `width` must be specified explicitly. In vertical mode the width
+will be that of its child but the `height` must be specified explicitly.
+
+If the child's width fits fully, it will not move, unless `bounce_always`
+is set.
+
+The `pause` parameter controls the amount of frames to pause at the
+beginning and midpoint of the bounce animation.
+
+The `curve` will be 'linear' if left empty, if specified it will allow
+another easing function to be used. The predefined curves are 'linear',
+'ease_in', 'ease_out' and 'ease_in_out'. It is also possible to specify
+a custom cubic bézier curve using the notation 'cubic-bezier(a, b, c, d)'
+with `a`, `b`, `c` and `d` being floating-point numbers.
+
+#### Attributes
+| Name | Type | Description | Required |
+| --- | --- | --- | --- |
+| `child` | `Widget` | Widget to potentially bounce | **Y** |
+| `width` | `int` | Width of the Bounce, required for horizontal | N |
+| `height` | `int` | Height of the Bounce, required for vertical | N |
+| `bounce_direction` | `str` | Direction to bounce, 'vertical' or 'horizontal', default is horizontal | N |
+| `bounce_always` | `bool` | Bounce child, even if it fits entirely | N |
+| `pause` | `int` | Pause duration at beginning and midpoint of animation, default and minimum value is 1 | N |
+| `curve` | `str / function` | Easing curve to use, default is 'linear' | N |
+
+#### Example
+```
+render.Bounce(
+     width=64,
+     child=render.Text("this won't fit in 64 pixels"),
+)
+```
+![](img/widget_Bounce_0.gif)
 
 
 ## Box
@@ -57,7 +135,7 @@ box, and the child can be padded (via `padding`).
 | `width` | `int` | Limits Box width | N |
 | `height` | `int` | Limits Box height | N |
 | `padding` | `int` | Padding around the child widget | N |
-| `color` | `color` | Background color | N |
+| `color` | `str` | Background color | N |
 
 #### Example
 ```
@@ -81,7 +159,7 @@ circle.
 #### Attributes
 | Name | Type | Description | Required |
 | --- | --- | --- | --- |
-| `color` | `color` | Fill color | **Y** |
+| `color` | `str` | Fill color | **Y** |
 | `diameter` | `int` | Diameter of the circle | **Y** |
 | `child` | `Widget` | Widget to place in the center of the circle | N |
 
@@ -122,7 +200,7 @@ one of the following `cross_align` values:
 #### Attributes
 | Name | Type | Description | Required |
 | --- | --- | --- | --- |
-| `children` | `list` | Child widgets to lay out | **Y** |
+| `children` | `[Widget]` | Child widgets to lay out | **Y** |
 | `main_align` | `str` | Alignment along vertical main axis | N |
 | `cross_align` | `str` | Alignment along horizontal cross axis | N |
 | `expanded` | `bool` | Column should expand to fill all available vertical space | N |
@@ -214,6 +292,17 @@ render.Marquee(
 ![](img/widget_Marquee_0.gif)
 
 
+## Origin
+An anchor point to use for scaling and rotation transforms.
+
+#### Attributes
+| Name | Type | Description | Required |
+| --- | --- | --- | --- |
+| `x` | `float / int / str` | Horizontal anchor point | **Y** |
+| `y` | `float / int / str` | Vertical anchor point | **Y** |
+
+
+
 ## Padding
 Padding places padding around its child.
 
@@ -226,9 +315,19 @@ accordingly.
 | Name | Type | Description | Required |
 | --- | --- | --- | --- |
 | `child` | `Widget` | The Widget to place padding around | **Y** |
-| `pad` | `insets` | Padding around the child | N |
+| `pad` | `int / (int, int, int, int)` | Padding around the child | N |
 | `expanded` | `bool` | This is a confusing parameter | N |
-| `color` | `color` | Background color | N |
+| `color` | `str` | Background color | N |
+
+
+
+## Rotate
+Transform by rotating by a given angle in degrees.
+
+#### Attributes
+| Name | Type | Description | Required |
+| --- | --- | --- | --- |
+| `angle` | `float / int` | Angle to rotate by in degrees | **Y** |
 
 
 
@@ -258,7 +357,7 @@ one of the following `cross_align` values:
 #### Attributes
 | Name | Type | Description | Required |
 | --- | --- | --- | --- |
-| `children` | `list` | Child widgets to lay out | **Y** |
+| `children` | `[Widget]` | Child widgets to lay out | **Y** |
 | `main_align` | `str` | Alignment along horizontal main axis | N |
 | `cross_align` | `str` | Alignment along vertical cross axis | N |
 | `expanded` | `bool` | Row should expand to fill all available horizontal space | N |
@@ -290,6 +389,17 @@ render.Row(
 ![](img/widget_Row_1.gif)
 
 
+## Scale
+Transform by scaling by a given factor.
+
+#### Attributes
+| Name | Type | Description | Required |
+| --- | --- | --- | --- |
+| `x` | `float / int` | Horizontal scale factor | **Y** |
+| `y` | `float / int` | Vertical scale factor | **Y** |
+
+
+
 ## Stack
 Stack draws its children on top of each other.
 
@@ -300,7 +410,7 @@ fit all its children.
 #### Attributes
 | Name | Type | Description | Required |
 | --- | --- | --- | --- |
-| `children` | `list` | Widgets to stack | **Y** |
+| `children` | `[Widget]` | Widgets to stack | **Y** |
 
 #### Example
 ```
@@ -329,15 +439,27 @@ information.
 | --- | --- | --- | --- |
 | `content` | `str` | The text string to draw | **Y** |
 | `font` | `str` | Desired font face | N |
+| `width` | `int` |  | N |
 | `height` | `int` | Limits height of the area on which text is drawn | N |
 | `offset` | `int` | Shifts position of text vertically. | N |
-| `color` | `color` | Desired font color | N |
+| `color` | `str` | Desired font color | N |
 
 #### Example
 ```
 render.Text(content="Tidbyt!", color="#099")
 ```
 ![](img/widget_Text_0.gif)
+
+
+## Translate
+Transform by translating by a given offset.
+
+#### Attributes
+| Name | Type | Description | Required |
+| --- | --- | --- | --- |
+| `x` | `float / int` | Horizontal offset | **Y** |
+| `y` | `float / int` | Vertical offset | **Y** |
+
 
 
 ## WrappedText
@@ -355,7 +477,7 @@ horizontal space as possible to fit the text.
 | `height` | `int` | Limits height of the area on which text may be drawn | N |
 | `width` | `int` | Limits width of the area on which text may be drawn | N |
 | `linespacing` | `int` | Controls spacing between lines | N |
-| `color` | `color` | Desired font color | N |
+| `color` | `str` | Desired font color | N |
 
 #### Example
 ```

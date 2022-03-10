@@ -1,0 +1,15 @@
+{{if not .ReadOnly}}
+	w.starlark{{.Render}} = {{.Starlark}}
+	for i := 0; i < {{.Starlark}}.Len(); i++ {
+		switch {{.Starlark}}Val := {{.Starlark}}.Index(i).(type) {
+		case *Translate:
+			w.{{.Render}} = append(w.{{.Render}}, {{.Starlark}}Val.Translate)
+		case *Scale:
+			w.{{.Render}} = append(w.{{.Render}}, {{.Starlark}}Val.Scale)
+		case *Rotate:
+			w.{{.Render}} = append(w.{{.Render}}, {{.Starlark}}Val.Rotate)
+		default:
+			return nil, fmt.Errorf("expected transform, but got '%s'", {{.Starlark}}Val.Type())
+		}
+	}
+{{end}}

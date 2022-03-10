@@ -29,12 +29,22 @@ import (
 const StarlarkHeaderTemplate = "./gen/header.tmpl"
 const StarlarkWidgetTemplate = "./gen/widget.tmpl"
 const DocumentationTemplate = "./gen/docs.tmpl"
-const RenderDirectory = "../render"
 const CodeOut = "./generated.go"
 const DocumentationOut = "../docs/widgets.md"
 const DocumentationDirectory = "../docs/"
 
-var RenderWidgets = []render.Widget{
+type RenderPackage struct {
+	Name       string
+	Directory  string
+	ImportPath string
+}
+
+var RenderPackages = []RenderPackage{
+	{"render", "../render", "tidbyt.dev/pixlet/render"},
+	{"animation", "../render/animation", "tidbyt.dev/pixlet/render/animation"},
+}
+
+var RenderWidgets = []interface{}{
 	&render.Text{},
 	&render.Image{},
 	render.Row{},
@@ -46,32 +56,124 @@ var RenderWidgets = []render.Widget{
 	render.Marquee{},
 	render.Animation{},
 	render.WrappedText{},
+
+	&animation.Animate{},
+	animation.Keyframe{},
+	animation.Origin{},
+	animation.Translate{},
+	animation.Scale{},
+	animation.Rotate{},
+
 	animation.Bounce{},
 	animation.AnimatedPositioned{},
+}
+
+type AttributeDefinition struct {
+	Type          string
+	StarlarkType  string
+	TemplatePath  string
+	StarlarkField bool
+}
+
+var AttributeDefinitions = map[interface{}]AttributeDefinition{
+	// Primitive types
+	new(string): {
+		Type:         "starlark.String",
+		StarlarkType: "str",
+		TemplatePath: "./gen/attr/string.tmpl",
+	},
+	new(int): {
+		Type:         "starlark.Int",
+		StarlarkType: "int",
+		TemplatePath: "./gen/attr/int.tmpl",
+	},
+	new(float64): {
+		Type:         "starlark.Value",
+		StarlarkType: "float / int",
+		TemplatePath: "./gen/attr/float.tmpl",
+	},
+	new(bool): {
+		Type:         "starlark.Bool",
+		StarlarkType: "bool",
+		TemplatePath: "./gen/attr/bool.tmpl",
+	},
+
+	// Render types
+	new(render.Insets): {
+		Type:         "starlark.Value",
+		StarlarkType: "int / (int, int, int, int)",
+		TemplatePath: "./gen/attr/insets.tmpl",
+	},
+	new(render.Widget): {
+		Type:         "starlark.Value",
+		StarlarkType: "Widget",
+		TemplatePath: "./gen/attr/child.tmpl",
+	},
+	new([]render.Widget): {
+		Type:         "*starlark.List",
+		StarlarkType: "[Widget]",
+		TemplatePath: "./gen/attr/children.tmpl",
+	},
+	new(color.Color): {
+		Type:          "starlark.String",
+		StarlarkType:  `str`,
+		TemplatePath:  "./gen/attr/color.tmpl",
+		StarlarkField: true,
+	},
+
+	// Animation types
+	new(animation.Origin): {
+		Type:         "starlark.Value",
+		StarlarkType: "Origin",
+		TemplatePath: "./gen/attr/origin.tmpl",
+	},
+	new(animation.Curve): {
+		Type:         "starlark.Value",
+		StarlarkType: `str / function`,
+		TemplatePath: "./gen/attr/curve.tmpl",
+	},
+	new(animation.Rounding): {
+		Type:          "starlark.String",
+		StarlarkType:  `str`,
+		TemplatePath:  "./gen/attr/rounding.tmpl",
+		StarlarkField: true,
+	},
+	new(animation.NumberOrPercentage): {
+		Type:         "starlark.Value",
+		StarlarkType: `float / int / str`,
+		TemplatePath: "./gen/attr/num_pct.tmpl",
+	},
+	new([]animation.Keyframe): {
+		Type:         "*starlark.List",
+		StarlarkType: "[Keyframe]",
+		TemplatePath: "./gen/attr/keyframes.tmpl",
+	},
+	new([]animation.Transform): {
+		Type:         "*starlark.List",
+		StarlarkType: "[Transform]",
+		TemplatePath: "./gen/attr/transforms.tmpl",
+	},
 }
 
 // Defines the starlark version of a render.Widget
 type Attribute struct {
 	Render        string
+	Type          string
 	Starlark      string
+	StarlarkType  string
+	StarlarkField bool
 	Required      bool
 	ReadOnly      bool
-	Type          string
+	Template      *template.Template
+	Code          string
 	Documentation string
 }
 
 type StarlarkWidget struct {
 	Name          string
 	FullName      string
-	AttrAll       []*Attribute
-	AttrString    []*Attribute
-	AttrInt       []*Attribute
-	AttrColor     []*Attribute
-	AttrCurve     []*Attribute
-	AttrBool      []*Attribute
-	AttrChildren  []*Attribute
-	AttrChild     []*Attribute
-	AttrInsets    []*Attribute
+	SuperName     string
+	Attr          []*Attribute
 	HasSize       bool
 	HasPtrRcvr    bool
 	RequiresInit  bool
@@ -89,7 +191,15 @@ func nilOrPanic(err error) {
 	}
 }
 
-func starlarkWidgetFromRenderWidget(w render.Widget) *StarlarkWidget {
+func decay(t reflect.Type) reflect.Type {
+	if t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice {
+		return t.Elem()
+	}
+
+	return t
+}
+
+func starlarkWidgetFromRenderWidget(w interface{}, docOnly bool) *StarlarkWidget {
 	sw := StarlarkWidget{}
 
 	val := reflect.ValueOf(w)
@@ -106,6 +216,10 @@ func starlarkWidgetFromRenderWidget(w render.Widget) *StarlarkWidget {
 	sw.Name = typ.Name()
 	sw.FullName = typ.String()
 
+	if _, isWidget := w.(render.Widget); isWidget {
+		sw.SuperName = "Widget"
+	}
+
 	if _, hasSize := w.(render.WidgetStaticSize); hasSize {
 		sw.HasSize = true
 	}
@@ -114,8 +228,8 @@ func starlarkWidgetFromRenderWidget(w render.Widget) *StarlarkWidget {
 		sw.RequiresInit = true
 	}
 
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
+FieldLoop:
+	for _, field := range deepFields(val) {
 
 		if field.PkgPath != "" || field.Anonymous {
 			// Field is not an exposed attribute
@@ -153,74 +267,63 @@ func starlarkWidgetFromRenderWidget(w render.Widget) *StarlarkWidget {
 			attr.Starlark = strings.ToLower(field.Name)
 		}
 
-		sw.AttrAll = append(sw.AttrAll, attr)
+		sw.Attr = append(sw.Attr, attr)
 
-		switch field.Type.Kind() {
-		case reflect.Int:
-			sw.AttrInt = append(sw.AttrInt, attr)
-			attr.Type = "int"
-		case reflect.String:
-			sw.AttrString = append(sw.AttrString, attr)
-			attr.Type = "str"
-		case reflect.Bool:
-			sw.AttrBool = append(sw.AttrBool, attr)
-			attr.Type = "bool"
-		case reflect.Slice:
-			sw.AttrChildren = append(sw.AttrChildren, attr)
-			attr.Type = "list"
-		case reflect.Struct:
-			insetsType := reflect.TypeOf((*render.Insets)(nil)).Elem()
-			if field.Type == insetsType {
-				sw.AttrInsets = append(sw.AttrInsets, attr)
-				attr.Type = "insets"
-			} else {
-				panic(fmt.Sprintf(
-					"%s.%s has unsupported type",
-					typ.Name(), field.Name,
-				))
-			}
-		case reflect.Interface:
-			colorType := reflect.TypeOf((*color.Color)(nil)).Elem()
-			curveType := reflect.TypeOf((*animation.Curve)(nil)).Elem()
-			widgetType := reflect.TypeOf((*render.Widget)(nil)).Elem()
-
-			if field.Type.Implements(colorType) {
-				sw.AttrColor = append(sw.AttrColor, attr)
-				attr.Type = "color"
-			} else if field.Type.Implements(curveType) {
-				sw.AttrCurve = append(sw.AttrCurve, attr)
-				attr.Type = "curve"
-			} else if field.Type.Implements(widgetType) {
-				sw.AttrChild = append(sw.AttrChild, attr)
-				attr.Type = "Widget"
-			} else {
-				panic(fmt.Sprintf(
-					"%s.%s has unsupported type",
-					typ.Name(), field.Name,
-				))
+		for val, def := range AttributeDefinitions {
+			if field.Type == decay(reflect.TypeOf(val)) {
+				attr.Type = def.Type
+				attr.StarlarkType = def.StarlarkType
+				attr.StarlarkField = def.StarlarkField
+				attr.Template = loadTemplate("attr", def.TemplatePath)
+				continue FieldLoop
 			}
 		}
+
+		panic(fmt.Sprintf(
+			"%s.%s has unsupported type",
+			typ.Name(), field.Name,
+		))
 	}
 
 	// Reorder AttrAll so that required fields appear first
-	sort.SliceStable(sw.AttrAll, func(i, j int) bool {
-		return sw.AttrAll[i].Required && !sw.AttrAll[j].Required
+	sort.SliceStable(sw.Attr, func(i, j int) bool {
+		return sw.Attr[i].Required && !sw.Attr[j].Required
 	})
 
 	return &sw
 }
 
+func deepFields(val reflect.Value) []reflect.StructField {
+	fields := make([]reflect.StructField, 0)
+	typ := val.Type()
+
+	for i := 0; i < typ.NumField(); i++ {
+		t := typ.Field(i)
+		v := val.Field(i)
+
+		if t.Anonymous && t.Type.Kind() == reflect.Struct {
+			fields = append(fields, deepFields(v)...)
+		} else {
+			fields = append(fields, t)
+		}
+	}
+
+	return fields
+}
+
 func attachWidgetDocs(widgets []*StarlarkWidget) {
 
-	// Parse all .go files in pixlet/render and extract all type doc comments
+	// Parse all .go files in pixlet/render packages and extract all type doc comments
 	fset := token.NewFileSet()
-	astPkgs, err := parser.ParseDir(fset, RenderDirectory, nil, parser.ParseComments)
-	nilOrPanic(err)
-	pkg := doc.New(astPkgs["render"], "tidbyt.dev/pixlet/render", 0)
-	nilOrPanic(err)
 	docs := map[string]string{}
-	for _, type_ := range pkg.Types {
-		docs[type_.Name] = type_.Doc
+	for _, p := range RenderPackages {
+		astPkgs, err := parser.ParseDir(fset, p.Directory, nil, parser.ParseComments)
+		nilOrPanic(err)
+		pkg := doc.New(astPkgs[p.Name], p.ImportPath, 0)
+		nilOrPanic(err)
+		for _, type_ := range pkg.Types {
+			docs[type_.Name] = type_.Doc
+		}
 	}
 
 	// These match our attribute docs and example blocks
@@ -243,7 +346,7 @@ func attachWidgetDocs(widgets []*StarlarkWidget) {
 		for _, group := range docRe.FindAllStringSubmatch(docs[widget.Name], -1) {
 			attrDocs[group[1]] = group[2]
 		}
-		for _, attr := range widget.AttrAll {
+		for _, attr := range widget.Attr {
 			attr.Documentation = attrDocs[attr.Render]
 		}
 
@@ -257,22 +360,34 @@ func attachWidgetDocs(widgets []*StarlarkWidget) {
 	}
 }
 
-func generateCode(widgets []*StarlarkWidget) {
+func loadTemplate(name, path string) *template.Template {
 	funcMap := template.FuncMap{
 		"ToLower": strings.ToLower,
 	}
 
-	headerTemplateContent, err := ioutil.ReadFile(StarlarkHeaderTemplate)
+	content, err := ioutil.ReadFile(path)
 	nilOrPanic(err)
 
-	headerTemplate, err := template.New("header").Funcs(funcMap).Parse(string(headerTemplateContent))
+	template, err := template.New(name).Funcs(funcMap).Parse(string(content))
 	nilOrPanic(err)
 
-	widgetTemplateContent, err := ioutil.ReadFile(StarlarkWidgetTemplate)
-	nilOrPanic(err)
+	return template
+}
 
-	widgetTemplate, err := template.New("widget").Funcs(funcMap).Parse(string(widgetTemplateContent))
-	nilOrPanic(err)
+func generateCode(widgets []*StarlarkWidget) {
+
+	headerTemplate := loadTemplate("header", StarlarkHeaderTemplate)
+	widgetTemplate := loadTemplate("widget", StarlarkWidgetTemplate)
+
+	// Execute attribute templates.
+	for _, widget := range widgets {
+		for _, attr := range widget.Attr {
+			var buf bytes.Buffer
+			err := attr.Template.Execute(&buf, attr)
+			nilOrPanic(err)
+			attr.Code = string(buf.Bytes())
+		}
+	}
 
 	outf, err := os.Create(CodeOut)
 	nilOrPanic(err)
@@ -293,37 +408,10 @@ func generateCode(widgets []*StarlarkWidget) {
 }
 
 func generateDocs(widgets []*StarlarkWidget) {
-	funcMap := template.FuncMap{
-		"attributeRow": func(attr *Attribute) string {
-			var name, type_, descr string
-
-			if attr.Required {
-				name = fmt.Sprintf("**%s**", attr.Starlark)
-			} else {
-				name = attr.Starlark
-			}
-
-			switch attr.Type {
-			case "str", "int", "bool", "list", "Widget":
-				type_ = attr.Type
-			case "color":
-				type_ = "str"
-			case "insets":
-				type_ = "int / (int, int, int, int)"
-			default:
-				panic(fmt.Sprintf("bad type: %s", attr.Type))
-			}
-
-			descr = attr.Documentation
-
-			return fmt.Sprintf("| %s | %s | %s |", name, type_, descr)
-		},
-	}
-
 	docsTemplateContent, err := ioutil.ReadFile(DocumentationTemplate)
 	nilOrPanic(err)
 
-	docsTemplate, err := template.New("docs").Funcs(funcMap).Parse(string(docsTemplateContent))
+	docsTemplate, err := template.New("docs").Parse(string(docsTemplateContent))
 	nilOrPanic(err)
 
 	outf, err := os.Create(DocumentationOut)
@@ -346,8 +434,9 @@ func generateDocs(widgets []*StarlarkWidget) {
 
 func main() {
 	widgets := []*StarlarkWidget{}
+
 	for _, w := range RenderWidgets {
-		widgets = append(widgets, starlarkWidgetFromRenderWidget(w))
+		widgets = append(widgets, starlarkWidgetFromRenderWidget(w, false))
 	}
 
 	sort.SliceStable(widgets, func(i, j int) bool {

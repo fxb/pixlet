@@ -1,0 +1,13 @@
+{{if not .ReadOnly}}
+	if {{.Starlark}} != nil {
+		{{.Starlark}}Widget, ok := {{.Starlark}}.(Widget)
+		if !ok {
+			return nil, fmt.Errorf(
+				"invalid type for {{.Starlark}}: %s (expected Widget)",
+				{{.Starlark}}.Type(),
+			)
+		}
+		w.{{.Render}} = {{.Starlark}}Widget.AsRenderWidget()
+		w.starlark{{.Render}} = {{.Starlark}}
+	}
+{{end}}

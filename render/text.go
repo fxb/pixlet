@@ -33,6 +33,7 @@ type Text struct {
 	Widget
 	Content string `starlark:"content,required"`
 	Font    string
+	Width   int `starlark:"width,readonly"`
 	Height  int
 	Offset  int
 	Color   color.Color
@@ -82,6 +83,7 @@ func (t *Text) Init() error {
 	dc.DrawString(t.Content, 0, float64(height-descent-t.Offset))
 
 	t.img = dc.Image()
+	t.Width = width
 
 	return nil
 }

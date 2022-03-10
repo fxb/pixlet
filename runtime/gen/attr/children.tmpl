@@ -1,0 +1,22 @@
+{{if not .ReadOnly}}
+	var {{.Starlark}}Val starlark.Value
+	{{.Starlark}}Iter := {{.Starlark}}.Iterate()
+	defer {{.Starlark}}Iter.Done()
+	for i := 0; {{.Starlark}}Iter.Next(&{{.Starlark}}Val);  {
+		if _, isNone := {{.Starlark}}Val.(starlark.NoneType); isNone {
+			continue
+		}
+
+		{{.Starlark}}Child, ok := {{.Starlark}}Val.(Widget)
+		if !ok {
+			return nil, fmt.Errorf(
+				"expected {{.Starlark}} to be a list of Widget but found: %s (at index %d)",
+				{{.Starlark}}Val.Type(),
+				i,
+			)
+		}
+
+		w.{{.Render}} = append(w.{{.Render}}, {{.Starlark}}Child.AsRenderWidget())
+	}
+	w.starlark{{.Render}} = {{.Starlark}}
+{{end}}

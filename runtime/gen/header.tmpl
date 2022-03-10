@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/mitchellh/hashstructure/v2"
@@ -12,10 +13,6 @@ import (
 	"go.starlark.net/starlarkstruct"
 	"tidbyt.dev/pixlet/render"
 	"tidbyt.dev/pixlet/render/animation"
-)
-
-const (
-	ModuleName = "render"
 )
 
 var (
@@ -32,12 +29,12 @@ func LoadModule() (starlark.StringDict, error) {
 		fnt.Freeze()
 
 		module = starlark.StringDict{
-			ModuleName: &starlarkstruct.Module{
-				Name: ModuleName,
+			"render": &starlarkstruct.Module{
+				Name: "render",
 				Members: starlark.StringDict{
-					"Root":       starlark.NewBuiltin("Root", newRoot),
-					"Plot":        starlark.NewBuiltin("Plot", newPlot),
-					"fonts": fnt,
+					"Root":     starlark.NewBuiltin("Root", newRoot),
+					"Plot":     starlark.NewBuiltin("Plot", newPlot),
+					"fonts":    fnt,
 {{range .}}
 					"{{.Name}}":  starlark.NewBuiltin("{{.Name}}", new{{.Name}}),
 {{end}}

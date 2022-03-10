@@ -1,0 +1,18 @@
+{{if not .ReadOnly}}
+	w.starlark{{.Render}} = {{.Starlark}}
+	{
+{{if eq .Render "X"}}
+		if val, err := NumberOrPercentageFromStarlark({{.Starlark}}, -math.MaxFloat64, math.MaxFloat64, map[string]float64{"left": 0.0, "center": 0.5, "right": 1.0}); err == nil {
+{{else if eq .Render "Y"}}
+		if val, err := NumberOrPercentageFromStarlark({{.Starlark}}, -math.MaxFloat64, math.MaxFloat64, map[string]float64{"top": 0.0, "center": 0.5, "bottom": 1.0}); err == nil {
+{{else if eq .Render "Percentage"}}
+		if val, err := NumberOrPercentageFromStarlark({{.Starlark}}, 0.0, 1.0, map[string]float64{"from": 0.0, "to": 1.0}); err == nil {
+{{else}}
+		if val, err := NumberOrPercentageFromStarlark({{.Starlark}}, -math.MaxFloat64, math.MaxFloat64, map[string]float64{}); err == nil {
+{{end}}
+			w.{{.Render}} = val
+		} else {
+			return nil, err
+		}
+	}
+{{end}}

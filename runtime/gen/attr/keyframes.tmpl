@@ -1,0 +1,10 @@
+{{if not .ReadOnly}}
+	w.starlark{{.Render}} = {{.Starlark}}
+	for i := 0; i < {{.Starlark}}.Len(); i++ {
+		if {{.Starlark}}Val, ok := {{.Starlark}}.Index(i).(*Keyframe); ok {
+			w.{{.Render}} = append(w.{{.Render}}, {{.Starlark}}Val.Keyframe)
+		} else {
+			return nil, fmt.Errorf("invalid type for keyframes: %s (expected Keyframe)", {{.Starlark}}Val.Type())
+		}
+	}
+{{end}}
