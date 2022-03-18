@@ -5,7 +5,7 @@ type {{.Name}} struct {
 	starlark{{.Render}} starlark.String
 {{end}}
 {{range .AttrCurve}}
-	starlark{{.Render}} starlark.String
+	starlark{{.Render}} starlark.Value
 {{end}}
 {{range .AttrChild}}
 	starlark{{.Render}} starlark.Value
@@ -37,7 +37,7 @@ func new{{.Name}}(
 		{{end}}
 		{{range .AttrColor}}{{if not .ReadOnly}}{{.Starlark}} starlark.String{{end}}
 		{{end}}
-		{{range .AttrCurve}}{{if not .ReadOnly}}{{.Starlark}} starlark.String{{end}}
+		{{range .AttrCurve}}{{if not .ReadOnly}}{{.Starlark}} starlark.Value{{end}}
 		{{end}}
 		{{range .AttrChild}}{{if not .ReadOnly}}{{.Starlark}} starlark.Value{{end}}
 		{{end}}
@@ -78,14 +78,12 @@ func new{{.Name}}(
 
 {{range .AttrCurve}}{{if not .ReadOnly}}
 	w.starlark{{.Render}} = {{.Starlark}}
-	if {{.Starlark}}.Len() > 0 {
-		c, err := animation.ParseCurve({{.Starlark}}.GoString())
+	{
+		var err error
+		w.{{.Render}}, err = animation.CurveFromStarlark({{.Starlark}})
 		if err != nil {
-			return nil, fmt.Errorf("{{.Starlark}} is not a valid curve string: %s", {{.Starlark}}.String())
+			return nil, fmt.Errorf("invalid type for {{.Starlark}}: %s (expected string or function)")
 		}
-		w.{{.Render}} = c
-	} else {
-		w.{{.Render}} = animation.LinearCurve{}
 	}
 {{end}}{{end}}
 

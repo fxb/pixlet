@@ -5,6 +5,8 @@ import (
 	"math"
 	"regexp"
 	"strconv"
+
+	"go.starlark.net/starlark"
 )
 
 var EaseIn = CubicBezierCurve{0.3, 0, 1, 1}
@@ -65,6 +67,48 @@ func (cb CubicBezierCurve) computeBezier(t, e, f float64) float64 {
 	return 3*e*(1-t)*(1-t)*t + 3*f*(1-t)*t*t + t*t*t
 }
 
+// Custom curve implemented as a starlark function
+type CustomCurve struct {
+	curveFn    *starlark.Function
+	isReversed bool
+}
+
+func (cc CustomCurve) Transform(t float64) float64 {
+	var arg starlark.Float
+
+	if cc.isReversed {
+		arg = starlark.Float(1.0 - t)
+	} else {
+		arg = starlark.Float(t)
+	}
+
+	r, err := starlark.Call(&starlark.Thread{}, cc.curveFn, starlark.Tuple{arg}, nil)
+	if err != nil {
+		fmt.Printf("Error calling curve function %s: %s\n", cc.curveFn.String(), err.Error())
+		return math.NaN()
+	}
+
+	f, ok := starlark.AsFloat(r)
+	if !ok {
+		fmt.Printf("Curve function did not return a floating point value!\n")
+		return math.NaN()
+	}
+
+	if cc.isReversed {
+		return 1.0 - f
+	} else {
+		return f
+	}
+}
+
+func (cc CustomCurve) Reverse() Curve {
+	return CustomCurve{cc.curveFn, !cc.isReversed}
+}
+
+func NewCustomCurve(curveFn *starlark.Function) CustomCurve {
+	return CustomCurve{curveFn, false}
+}
+
 var cubicBezierRe = regexp.MustCompile(
 	`^cubic-bezier\(` +
 		`(?P<a>[+-]?([0-9]*\.)?[0-9]+), ` +
@@ -73,8 +117,8 @@ var cubicBezierRe = regexp.MustCompile(
 		`(?P<d>[+-]?([0-9]*\.)?[0-9]+)` +
 		`\)$`)
 
-func ParseCurve(scurve string) (Curve, error) {
-	match := cubicBezierRe.FindStringSubmatch(scurve)
+func ParseCurve(curveStr string) (Curve, error) {
+	match := cubicBezierRe.FindStringSubmatch(curveStr)
 	if match != nil {
 		result := make(map[string]string)
 
@@ -92,7 +136,7 @@ func ParseCurve(scurve string) (Curve, error) {
 		return CubicBezierCurve{a, b, c, d}, nil
 	}
 
-	switch scurve {
+	switch curveStr {
 	case "linear":
 		return LinearCurve{}, nil
 	case "ease_in":
@@ -102,6 +146,33 @@ func ParseCurve(scurve string) (Curve, error) {
 	case "ease_in_out":
 		return EaseInOut, nil
 	default:
-		return LinearCurve{}, fmt.Errorf("curve: %v is not a valid curve name", scurve)
+		return LinearCurve{}, fmt.Errorf("curve: %v is not a valid curve name", curveStr)
 	}
+}
+
+func CurveFromStarlark(value starlark.Value) (Curve, error) {
+	curveStr, ok := value.(starlark.String)
+	if ok {
+		if curveStr.Len() > 0 {
+			curve, err := ParseCurve(curveStr.GoString())
+			if err != nil {
+				return LinearCurve{}, fmt.Errorf("curve is not a valid curve string: %s", curveStr.GoString())
+			}
+
+			return curve, nil
+		} else {
+			return LinearCurve{}, nil
+		}
+	}
+
+	curveFn, ok := value.(*starlark.Function)
+	if ok {
+		if curveFn.NumParams() != 1 || curveFn.NumKwonlyParams() != 0 {
+			return LinearCurve{}, fmt.Errorf("invalid number of parameters to curve function: %s", curveFn.String())
+		}
+
+		return NewCustomCurve(curveFn), nil
+	}
+
+	return LinearCurve{}, nil
 }
