@@ -12,7 +12,6 @@ import (
 	_ "image/png"
 
 	"github.com/nfnt/resize"
-	"github.com/tidbyt/go-libwebp/webp"
 )
 
 // Image renders the binary image data passed via `src`. Supported
@@ -49,25 +48,6 @@ func (p *Image) Size() (int, int) {
 
 func (p *Image) FrameCount() int {
 	return len(p.imgs)
-}
-
-func (p *Image) InitFromWebP(data []byte) error {
-	decoder, err := webp.NewAnimationDecoder(data)
-	if err != nil {
-		return fmt.Errorf("creating animation decoder: %v", err)
-	}
-
-	img, err := decoder.Decode()
-	if err != nil {
-		return fmt.Errorf("decoding image data: %v", err)
-	}
-
-	p.Delay = img.Timestamp[0]
-	for _, im := range img.Image {
-		p.imgs = append(p.imgs, im)
-	}
-
-	return nil
 }
 
 func (p *Image) InitFromGIF(data []byte) error {
@@ -108,6 +88,10 @@ func (p *Image) InitFromImage(data []byte) error {
 	return nil
 }
 
+type ImageWithInitFromWebP interface {
+	InitFromWebP(data []byte) error
+}
+
 func (p *Image) Init() error {
 	err := p.InitFromWebP([]byte(p.Src))
 	if err != nil {
@@ -128,11 +112,11 @@ func (p *Image) Init() error {
 		nw, nh := p.Width, p.Height
 		if nw == 0 {
 			// scale width, maintaining original aspect ratio
-			nw = int(float64(nh)*(float64(w)/float64(h)))
+			nw = int(float64(nh) * (float64(w) / float64(h)))
 		}
 		if nh == 0 {
 			// scale height, maintaining original aspect ratio
-			nh = int(float64(nw)*(float64(h)/float64(w)))
+			nh = int(float64(nw) * (float64(h) / float64(w)))
 		}
 
 		for i := 0; i < len(p.imgs); i++ {

@@ -8,6 +8,9 @@ else
 	LDFLAGS = -ldflags="-X 'tidbyt.dev/pixlet/cmd.Version=$(GIT_COMMIT)'"
 endif
 
+BINARY_WASM = pixlet.wasm
+LDFLAGS_WASM = -ldflags="-s -w"
+
 test:
 	go test -v -cover ./...
 
@@ -21,6 +24,9 @@ bench:
 
 build: clean
 	 go build $(LDFLAGS) -o $(BINARY) tidbyt.dev/pixlet
+
+build-wasm:
+	 GOOS=js GOARCH=wasm go build $(LDFLAGS_WASM) -o $(BINARY_WASM) tidbyt.dev/pixlet/wasm/main
 
 embedfonts:
 	go run render/gen/embedfonts.go
